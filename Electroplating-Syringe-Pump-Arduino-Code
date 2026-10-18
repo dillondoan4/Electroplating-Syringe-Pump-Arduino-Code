@@ -1,0 +1,133 @@
+#define potentiometer  A0  // 10k Potentiometer (still works as a manual override)
+#define bt_F A1  // Forward Button (Clockwise)
+#define bt_S A2  // Stop Button
+#define bt_B A3  // Backward Button (Counterclockwise)
+
+#define dirPin  8   // Motor direction
+#define stepPin 9   // Motor step
+#define enPin  10   // Motor enable
+#define ms1 2
+#define ms2 3
+#define ms3 4
+
+unsigned long Speed_Delay_us = 2000;  // microseconds between steps -- lower = faster
+int Mode = 1;  // 1 = Stop, 2 = Forward, 3 = Backward
+bool motorEnabled = false;
+bool stopFlag = false;
+bool useSerialSpeed = true;  // true = serial number controls speed, false = pot controls speed
+
+unsigned long lastStepTime = 0;
+unsigned long lastDebugTime = 0;
+const unsigned long debugInterval = 500;
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("--- Motor System Start ---");
+  Serial.println("Type a number + Enter to set step delay (microseconds). Lower = faster.");
+  Serial.println("Type 'pot' to switch back to potentiometer control.");
+
+  pinMode(potentiometer, INPUT);
+
+  pinMode(bt_F, INPUT_PULLUP);
+  pinMode(bt_S, INPUT_PULLUP);
+  pinMode(bt_B, INPUT_PULLUP);
+
+  pinMode(dirPin, OUTPUT);
+  pinMode(stepPin, OUTPUT);
+  pinMode(enPin, OUTPUT);
+  digitalWrite(enPin, HIGH);  // Motor disabled on startup
+
+  pinMode(ms1, OUTPUT);
+  pinMode(ms2, OUTPUT);
+  pinMode(ms3, OUTPUT);
+  digitalWrite(ms1, HIGH);
+  digitalWrite(ms2, HIGH);
+  digitalWrite(ms3, LOW);
+}
+
+void loop() {
+  // ---- Serial input: type a number to set speed directly ----
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+
+    if (input.equalsIgnoreCase("pot")) {
+      useSerialSpeed = false;
+      Serial.println("Now using potentiometer for speed.");
+    } else if (input.length() > 0) {
+      long val = input.toInt();
+      if (val > 0) {
+        Speed_Delay_us = val;
+        useSerialSpeed = true;
+        Serial.print("Step delay set to: ");
+        Serial.print(Speed_Delay_us);
+        Serial.println(" us");
+      } else {
+        Serial.println("Invalid number.");
+      }
+    }
+  }
+
+  // ---- Potentiometer (only used if you type 'pot') ----
+  int read_ADC = analogRead(potentiometer);
+  if (!useSerialSpeed) {
+    Speed_Delay_us = map(read_ADC, 0, 1023, 10000, 2000);
+  }
+
+  // ---- Motor enable logic ----
+  // Enabled whenever we're not in Stop mode
+  bool shouldRun = (Mode != 1);
+  if (shouldRun && !motorEnabled) {
+    motorEnabled = true;
+    digitalWrite(enPin, LOW);
+  } else if (!shouldRun && motorEnabled) {
+    motorEnabled = false;
+    digitalWrite(enPin, HIGH);
+  }
+
+  // ---- Direction/Stop buttons ----
+  if (digitalRead(bt_F) == LOW) {
+    Mode = 2;
+  }
+  if (digitalRead(bt_B) == LOW) {
+    Mode = 3;
+  }
+  if (digitalRead(bt_S) == LOW) {
+    if (!stopFlag) {
+      stopFlag = true;
+      Mode = 1;
+    }
+  } else {
+    stopFlag = false;
+  }
+
+  // ---- Non-blocking stepping ----
+  if (motorEnabled && Mode != 1) {
+    digitalWrite(dirPin, (Mode == 2) ? HIGH : LOW);
+
+    unsigned long now = micros();
+    if (now - lastStepTime >= Speed_Delay_us) {
+      lastStepTime = now;
+      digitalWrite(stepPin, HIGH);
+      delayMicroseconds(5);
+      digitalWrite(stepPin, LOW);
+    }
+  }
+
+  // ---- Serial debug ----
+  if (millis() - lastDebugTime >= debugInterval) {
+    lastDebugTime = millis();
+
+    Serial.print("StepDelay(us): ");
+    Serial.print(Speed_Delay_us);
+    Serial.print("\t| Source: ");
+    Serial.print(useSerialSpeed ? "Serial" : "Pot");
+    Serial.print("\t| Mode: ");
+
+    switch (Mode) {
+      case 1: Serial.println("1 (STOP)"); break;
+      case 2: Serial.println("2 (Retract)"); break;
+      case 3: Serial.println("3 (Eject)"); break;
+    }
+  }
+}
